@@ -1,0 +1,202 @@
+# name: postgis-check
+
+# on:
+#   workflow_dispatch:
+#     inputs:
+#       issue-number:
+#         description: 'The issue-number of the slash command'
+#         required: true
+#       comment-creation-date:
+#         description: 'The slash command creation date passed from the slash-command workflow'
+#         required: true
+#       versions:
+#         description: 'Wanted postgis docker versions to check'
+#         required: false
+#       node-versions:
+#         description: 'Node.js versions to check'
+#         required: false
+
+# jobs:
+#   postgis_check:
+#     uses: MapColonies/shared-workflows/.github/workflows/postgis-check-command.yml@fix-slash-command
+#     secrets: inherit
+#     with:
+#       issue-number: ${{ inputs.issue-number }}
+#       comment-creation-date: ${{ inputs.comment-creation-date }}
+#       versions: ${{ inputs.versions }}
+#       node-versions: ${{ inputs.node-versions }}
+
+name: pg-check
+
+on:
+  workflow_dispatch:
+    inputs:
+      issue-number:
+        description: 'The issue-number of the slash command'
+        required: true
+      comment-creation-date:
+        description: 'The slash command creation date passed from the slash-command workflow'
+        required: true
+      versions:
+        description: 'Wanted postgis docker versions to check'
+        default: ''
+        required: false
+      node-versions:
+        description: 'Node.js versions to check'
+        default: 20.x
+        required: false
+      schema:
+        description: 'Wanted schema for migrations'
+        required: true
+
+env:
+  DB_HOST: localhost
+  DB_PORT: 5432
+  DB_NAME: postgres
+  DB_USERNAME: postgres
+  DB_PASSWORD: stam
+  DEFAULT_VERSIONS: 12-2.5,13-3.3
+
+jobs:
+  # Convert versions variable from comma delimited string to JSON
+  versions_to_json:
+    name: Convert versions input to JSON
+    runs-on: ubuntu-latest
+    outputs:
+      versions: ${{ steps.convert-to-json.outputs.VERSIONS }}
+    steps:
+      - id: convert-to-json
+        run: |
+          if [ -z "${{inputs.versions}}" ]; then
+            versions=${{env.DEFAULT_VERSIONS}}
+          else
+            versions=${{ inputs.versions }}
+          fi
+          versions_json=$(echo $versions | jq -R -c 'split(",")')
+          echo "VERSIONS=$versions_json" >> $GITHUB_OUTPUT
+  
+  # Convert node-versions variable from comma-delimited string to JSON  
+  node_versions_to_json:
+    name: Convert node-versions input to JSON
+    runs-on: ubuntu-latest
+    outputs:
+      node_versions: ${{ steps.convert-to-json.outputs.NODE_VERSIONS }}
+    steps:
+      - id: convert-to-json
+        run: |
+          versions=$(echo ${{ inputs.node-versions }} | jq -R -c 'split(",")')
+          echo "NODE_VERSIONS=$versions" >> $GITHUB_OUTPUT
+  
+  # Create a PR comment for the workflow's results
+  create_comment:
+    name: Create comment
+    runs-on: ubuntu-latest
+
+    steps:
+      # Find our bot's comment
+      # - name: Find Comment
+      #   uses: peter-evans/find-comment@v3
+      #   id: fc
+      #   with:
+      #     issue-number: ${{ inputs.issue-number }}
+      #     comment-author: 'github-actions[bot]'
+      #     body-includes: Postgres and postgis compatibility
+
+      # Create a comment if it doesn't exist
+      - name: Create comment
+        # if: steps.fc.outputs.comment-id == ''
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          issue-number: ${{ inputs.issue-number }}
+          body: |
+            **${{ inputs.comment-creation-date }}**
+            Checking postgis compatability for latest commit
+
+      # If a comment exists, update it with the date and time
+      # - name: Update comment
+      #   if: steps.fc.outputs.comment-id != ''
+      #   uses: peter-evans/create-or-update-comment@v4
+      #   with:
+      #     comment-id: ${{ steps.fc.outputs.comment-id }}
+      #     body: |
+      #       **${{ inputs.comment-creation-date }}**
+
+  tests:
+    name: Run Tests
+    needs: [node_versions_to_json, versions_to_json, create_comment]
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ${{ fromJSON(needs.node_versions_to_json.outputs.node_versions) }}
+        postgres: ${{ fromJSON(needs.versions_to_json.outputs.versions) }}
+
+    services:
+      postgres:
+        image: postgis/postgis:${{matrix.postgres}}
+        env:
+          POSTGRES_DB: ${{ env.DB_NAME }}
+          POSTGRES_USER: ${{ env.DB_USERNAME }}
+          POSTGRES_PASSWORD: ${{ env.DB_PASSWORD }}
+        ports:
+          - 5432:5432
+        # Set health checks to wait until postgres has started
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Check out Git repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: Install TS Project dependencies
+        run: npm ci
+
+      - name: Create schema
+        if: inputs.schema != ''
+        run: psql -h $DB_HOST -d $DB_NAME -U $DB_USERNAME -c 'CREATE SCHEMA ${{ inputs.schema }};'
+        env:
+          PGPASSWORD: ${{ env.DB_PASSWORD }}
+
+      - name: Run migrations
+        run: npm run migration:run
+
+      - name: Run tests
+        id: test
+        run: env && npm run test:integration
+
+      # Find our bot's comment
+      - name: Find Comment
+        uses: peter-evans/find-comment@v3
+        if: always()
+        id: fc
+        with:
+          issue-number: ${{ inputs.issue-number }}
+          comment-author: 'github-actions[bot]'
+          body-includes: ${{ inputs.comment-creation-date }}
+
+      # # Create a comment if it doesn't exist
+      # - name: Create comment
+      #   if: steps.fc.outputs.comment-id == ''
+      #   uses: peter-evans/create-or-update-comment@v4
+      #   with:
+      #     issue-number: ${{ github.event.issue.number }}
+      #     body: |
+      #       **Checking postgis compatability for ${{ github.sha }}**
+  
+      # If a comment exists, update it with the test result
+      - name: Update comment
+        if: always() && steps.fc.outputs.comment-id != ''
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          comment-id: ${{ steps.fc.outputs.comment-id }}
+          body: |
+            ${{ steps.test.outcome == 'success' && ':white_check_mark:' || ':x:' }} run for `postgis/postgis:${{matrix.postgres}}`
