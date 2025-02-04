@@ -1,0 +1,10 @@
+name: Slash Command Dispatch
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  slash_command_dispatch:
+    uses: MapColonies/shared-workflows/.github/workflows/slash-command.yaml@fix-slash-command
+    secrets: inherit
