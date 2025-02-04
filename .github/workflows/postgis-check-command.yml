@@ -43,7 +43,7 @@ on:
         required: false
       node-versions:
         description: 'Node.js versions to check'
-        default: 16.x
+        default: 20.x
         required: false
       schema:
         description: 'Wanted schema for migrations'
