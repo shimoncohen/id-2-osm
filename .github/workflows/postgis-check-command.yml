@@ -47,7 +47,8 @@ on:
         required: false
       schema:
         description: 'Wanted schema for migrations'
-        required: true
+        default: id_2_osm
+        required: false
 
 env:
   DB_HOST: localhost
