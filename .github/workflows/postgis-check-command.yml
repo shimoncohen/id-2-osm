@@ -154,10 +154,19 @@ jobs:
         env:
           GITHUB_CONTEXT: ${{ toJson(github) }}
         run: echo "$GITHUB_CONTEXT"
-      - name: Check out Git repository
+      - name: resolve pr refs
+        id: refs
+        uses: eficode/resolve-pr-refs@main
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Checkout pull request branch
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.ref }}
+          ref: ${{ steps.refs.outputs.base_ref }}
+      # - name: Check out Git repository
+      #   uses: actions/checkout@v4
+      #   with:
+      #     ref: ${{ github.ref }}
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
